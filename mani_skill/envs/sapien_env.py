@@ -13,6 +13,7 @@ import sapien.render
 import sapien.utils.viewer.control_window
 import torch
 from gymnasium.vector.utils import batch_space
+from trimesh.sample import sample_surface
 
 from mani_skill import PACKAGE_ASSET_DIR, logger
 from mani_skill.agents import REGISTERED_AGENTS
@@ -33,6 +34,11 @@ from mani_skill.sensors.camera import (
 )
 from mani_skill.sensors.depth_camera import StereoDepthCamera, StereoDepthCameraConfig
 from mani_skill.utils import common, gym_utils, sapien_utils
+from mani_skill.utils.geometry.trimesh_utils import (
+    get_component_mesh,
+    get_component_meshes,
+    merge_meshes,
+)
 from mani_skill.utils.structs import Actor, Articulation
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.structs.types import Array, SimConfig
@@ -1318,35 +1324,48 @@ class BaseEnv(gym.Env):
         else:
             raise NotImplementedError(f"Unsupported render mode {self.render_mode}.")
 
-    # TODO (stao): re implement later
     # ---------------------------------------------------------------------------- #
     # Advanced
     # ---------------------------------------------------------------------------- #
 
-    # def gen_scene_pcd(self, num_points: int = int(1e5)) -> np.ndarray:
-    #     """Generate scene point cloud for motion planning, excluding the robot"""
-    #     meshes = []
-    #     articulations = self.scene.get_all_articulations()
-    #     if self.agent is not None:
-    #         articulations.pop(articulations.index(self.agent.robot))
-    #     for articulation in articulations:
-    #         articulation_mesh = merge_meshes(get_articulation_meshes(articulation))
-    #         if articulation_mesh:
-    #             meshes.append(articulation_mesh)
+    def _gen_single_env_pcd(self, env_idx: int, num_points: int = int(1e3), include_robot: bool = False):
+        """Generates pointcloud of the scene by sampling from the mesh of the objects/articulated parts
+           for a single environment."""
+        articulations = self.scene.get_all_articulations()[env_idx]
+        env_pcd_dict = {}
 
-    #     for actor in self.scene.get_all_actors():
-    #         actor_mesh = merge_meshes(get_component_meshes(actor))
-    #         if actor_mesh:
-    #             meshes.append(
-    #                 actor_mesh.apply_transform(
-    #                     actor.get_pose().to_transformation_matrix()
-    #                 )
-    #             )
+        # articulations of the robot
+        if include_robot:
+            for l in articulations.links:
+                link_mesh = get_component_mesh(l, to_world_frame=False)
+                if link_mesh:
+                    link_name = 'robot_'+l.name
+                    link_pcd, _, colors = sample_surface(link_mesh, num_points, sample_color=True)
+                    env_pcd_dict.update({link_name: link_pcd.copy()})
 
-    #     scene_mesh = merge_meshes(meshes)
-    #     scene_pcd = scene_mesh.sample(num_points)
-    #     return scene_pcd
+        # objects (excluding robot) in the scene
+        for actor in self.scene.get_all_actors():
+            actor_rigid_components = [comp for comp in  actor.components if 'Rigid' in str(type(comp))]
+            assert len(actor_rigid_components) == 1
+            actor_mesh = merge_meshes(get_component_meshes(actor_rigid_components[0]))
+            if actor_mesh:
+                # actor_pose = actor.get_pose().to_transformation_matrix()
+                # actor_mesh = actor_mesh.apply_transform(actor_pose)
+                actor_pcd, _, colors = sample_surface(actor_mesh, num_points, sample_color=True)
+                env_pcd_dict.update({actor.name: actor_pcd.copy()})
 
+        env_pcd = np.concatenate(list(env_pcd_dict.values()), axis=0)
+        return env_pcd_dict, env_pcd
+
+    def gen_scene_pcd(self, num_points: int = int(1e3), include_robot: bool = False):
+        """Generates pointcloud of the scene by sampling from the mesh of the objects/articulated parts
+           for all environment instances."""
+        scene_pcd = []
+        for env_idx in range(self.num_envs):
+            _, env_pcd = self._gen_single_env_pcd(env_idx, num_points=num_points, include_robot=include_robot)
+            scene_pcd.append(env_pcd)
+
+        return np.stack(scene_pcd, axis=0)
 
     # Printing metrics/info
     def print_sim_details(self):
