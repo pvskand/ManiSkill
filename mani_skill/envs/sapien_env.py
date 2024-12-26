@@ -1337,7 +1337,7 @@ class BaseEnv(gym.Env):
         # articulations of the robot
         if include_robot:
             for l in articulations.links:
-                link_mesh = get_component_mesh(l, to_world_frame=False)
+                link_mesh = get_component_mesh(l, to_world_frame=True)
                 if link_mesh:
                     link_name = 'robot_'+l.name
                     link_pcd, _, colors = sample_surface(link_mesh, num_points, sample_color=True)
@@ -1349,8 +1349,8 @@ class BaseEnv(gym.Env):
             assert len(actor_rigid_components) == 1
             actor_mesh = merge_meshes(get_component_meshes(actor_rigid_components[0]))
             if actor_mesh:
-                # actor_pose = actor.get_pose().to_transformation_matrix()
-                # actor_mesh = actor_mesh.apply_transform(actor_pose)
+                actor_pose = actor.get_pose().to_transformation_matrix()
+                actor_mesh = actor_mesh.apply_transform(actor_pose)
                 actor_pcd, _, colors = sample_surface(actor_mesh, num_points, sample_color=True)
                 env_pcd_dict.update({actor.name: actor_pcd.copy()})
 
