@@ -417,6 +417,22 @@ class ManiSkillScene:
             for c in self.px.rigid_dynamic_components + self.px.rigid_static_components
         ]
 
+    def get_all_actors_v2(self):
+        """
+        Returns list of all sapien. Entity objects that have rigid dynamic and static components across all sub scenes
+        """
+        entities = [
+            c.entity
+            for c in self.px.rigid_dynamic_components + self.px.rigid_static_components
+        ]
+        actors = [[] for _ in range(self.num_envs)]
+
+        for env_idx in range(self.num_envs):
+            for entity in entities:
+                if "scene-" + str(env_idx) in entity.name:
+                    actors[env_idx].append(entity)
+        return actors
+
     def get_all_articulations(self):
         """
         Returns list of all physx articulation objects across all sub scenes
@@ -424,6 +440,20 @@ class ManiSkillScene:
         return [
             c.articulation for c in self.px.articulation_link_components if c.is_root
         ]
+
+    def get_all_articulations_v2(self):
+        """
+        Returns list of all physx articulation objects across all sub scenes
+        """
+        articulations = [
+            c.articulation for c in self.px.articulation_link_components if c.is_root
+        ]
+        actors = [None] * self.num_envs
+        for env_idx in range(self.num_envs):
+            for arti in articulations:
+                if "scene-" + str(env_idx) in arti.name:
+                    actors[env_idx] = arti
+        return actors
 
     def create_drive(
         self,

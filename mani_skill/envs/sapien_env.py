@@ -34,11 +34,7 @@ from mani_skill.sensors.camera import (
 )
 from mani_skill.sensors.depth_camera import StereoDepthCamera, StereoDepthCameraConfig
 from mani_skill.utils import common, gym_utils, sapien_utils
-from mani_skill.utils.geometry.trimesh_utils import (
-    get_component_mesh,
-    get_component_meshes,
-    merge_meshes,
-)
+from mani_skill.utils.geometry.trimesh_utils import get_component_mesh
 from mani_skill.utils.structs import Actor, Articulation
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.structs.types import Array, SimConfig
@@ -1328,32 +1324,43 @@ class BaseEnv(gym.Env):
     # Advanced
     # ---------------------------------------------------------------------------- #
 
-    def _gen_single_env_pcd(self, env_idx: int, num_points: int = int(1e3), include_robot: bool = False):
+    def gen_single_env_pcd(self, env_idx: int, num_points: int = int(1e3), include_robot: bool = False):
         """Generates pointcloud of the scene by sampling from the mesh of the objects/articulated parts
            for a single environment."""
-        articulations = self.scene.get_all_articulations()[env_idx]
         env_pcd_dict = {}
 
         # articulations of the robot
         if include_robot:
-            for l in articulations.links:
-                link_mesh = get_component_mesh(l, to_world_frame=True)
+            for l in self.scene.get_all_articulations_v2()[env_idx].links:
+                link_mesh = get_component_mesh(l, to_world_frame=False)
                 if link_mesh:
-                    link_name = 'robot_'+l.name
+                    prefix_to_be_removed = len(f"scene-{str(env_idx)}-{self.robot_uids}_")
+                    link_name = l.name[prefix_to_be_removed:]
+                    robot_name = self.robot_uids
+                    link_pose = self.scene.px.cuda_rigid_body_data.torch()[self.scene.articulations[robot_name].links_map[link_name]._body_data_index[self.scene._reset_mask[self.scene.articulations[robot_name]._scene_idxs]], :7]
+                    link_pose = Pose(link_pose).to_transformation_matrix()
+                    link_mesh = link_mesh.apply_transform(link_pose.cpu()[env_idx])
                     link_pcd, _, colors = sample_surface(link_mesh, num_points, sample_color=True)
                     env_pcd_dict.update({link_name: link_pcd.copy()})
 
         # objects (excluding robot) in the scene
-        for actor in self.scene.get_all_actors():
+        for actor in self.scene.get_all_actors_v2()[env_idx]:
             actor_rigid_components = [comp for comp in  actor.components if 'Rigid' in str(type(comp))]
             assert len(actor_rigid_components) == 1
-            actor_mesh = merge_meshes(get_component_meshes(actor_rigid_components[0]))
+            actor_mesh = get_component_mesh(actor_rigid_components[0], to_world_frame=False)
             if actor_mesh:
-                actor_pose = actor.get_pose().to_transformation_matrix()
-                actor_mesh = actor_mesh.apply_transform(actor_pose)
+                prefix_to_be_removed = len("scene-"+str(env_idx)+"_")
+                name = actor.name[prefix_to_be_removed:]
+                if "scs" not in name:
+                    actor_pose = self.scene.px.cuda_rigid_body_data.torch()[self.scene.actors[name]._body_data_index[self.scene._reset_mask[self.scene.actors[name]._scene_idxs]], :7]
+                    actor_pose = Pose(actor_pose).to_transformation_matrix()
+                    actor_mesh = actor_mesh.apply_transform(actor_pose.cpu()[env_idx])
+                else:
+                    actor_pose = actor.get_pose().to_transformation_matrix()
+                    actor_mesh = actor_mesh.apply_transform(actor_pose)
+
                 actor_pcd, _, colors = sample_surface(actor_mesh, num_points, sample_color=True)
                 env_pcd_dict.update({actor.name: actor_pcd.copy()})
-
         env_pcd = np.concatenate(list(env_pcd_dict.values()), axis=0)
         return env_pcd_dict, env_pcd
 
@@ -1362,7 +1369,7 @@ class BaseEnv(gym.Env):
            for all environment instances."""
         scene_pcd = []
         for env_idx in range(self.num_envs):
-            _, env_pcd = self._gen_single_env_pcd(env_idx, num_points=num_points, include_robot=include_robot)
+            _, env_pcd = self.gen_single_env_pcd(env_idx, num_points=num_points, include_robot=include_robot)
             scene_pcd.append(env_pcd)
 
         return np.stack(scene_pcd, axis=0)
